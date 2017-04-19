@@ -110,7 +110,7 @@ unsigned int *read_ppm( char *filename, int * xsize, int * ysize, int *maxval ){
 
 void write_ppm( char *filename, int xsize, int ysize, int maxval, int *pic) {
 	FILE *fp;
-	int x,y;
+	//int x,y;
 
 	fp = fopen(filename, "w");
 	if (!fp) 
@@ -129,6 +129,60 @@ void write_ppm( char *filename, int xsize, int ysize, int maxval, int *pic) {
 	}
 
 	fclose(fp);
+}
+
+__global__ void sobel(int* imageWidth, int* imageHeight, int* image, int* output, int* threshold) {
+	int width = *imageWidth;
+	int height = *imageHeight;
+
+	for (int i = 1;  i < height - 1; i++) {
+		for (int j = 1; j < width -1; j++) {
+			int offset = i * width + j;
+			
+
+			int sum1 =  image[width * (i - 1) + j + 1 ] - image[width * (i - 1) + j - 1] +
+						2 * image[width * (i) + j + 1 ] - 2 * image[width * (i) + j - 1] +
+						image[width * (i + 1) + j + 1 ] - image[width * (i + 1) + j - 1];
+
+			int sum2 = image[width * (i - 1) + j - 1] + 2 * image[width * (i - 1) + j] +
+					   image[width * (i - 1) + j + 1] - image[width * (i + 1) + j - 1] - 
+				   	   2 * image[width * (i + 1) + j] - image[width * (i + 1) + j + 1];
+
+			int magnitude =  sum1 * sum1 + sum2 * sum2;
+
+			if (magnitude > *threshold) {
+				output[offset] = 255;
+			}
+			else { 
+				output[offset] = 0;
+			}
+		}
+	}
+
+/*
+	for (i = 1;  i < ysize - 1; i++) {
+		for (j = 1; j < xsize -1; j++) {
+			int offset = i*xsize + j;
+
+			sum1 =  pic[xsize * (i - 1) + j + 1 ] - pic[xsize * (i - 1) + j - 1] +
+					2 * pic[xsize * (i) + j + 1 ] - 2 * pic[xsize * (i) + j - 1] +
+					pic[xsize * (i + 1) + j + 1 ] - pic[xsize * (i + 1) + j - 1];
+
+			sum2 = pic[xsize * (i - 1) + j - 1] + 2 * pic[xsize * (i - 1) + j] +
+				   pic[xsize * (i - 1) + j + 1] - pic[xsize * (i + 1) + j - 1] - 
+				   2 * pic[xsize * (i + 1) + j] - pic[xsize * (i + 1) + j + 1];
+
+			magnitude =  sum1 * sum1 + sum2 * sum2;
+
+			if (magnitude > thresh) {
+				result[offset] = 255;
+			}
+			else { 
+				result[offset] = 0;
+			}
+		}
+	}
+*/
 }
 
 int main( int argc, char **argv )
@@ -152,7 +206,6 @@ int main( int argc, char **argv )
 	int xsize, ysize, maxval;
 	unsigned int *pic = read_ppm( filename, &xsize, &ysize, &maxval ); 
 
-
 	int numbytes =  xsize * ysize * 3 * sizeof( int );
 	int *result = (int *) malloc( numbytes );
 
@@ -161,39 +214,40 @@ int main( int argc, char **argv )
 		exit(-1); // fail
 	}
 
-	int i, j, magnitude, sum1, sum2; 
 	int *out = result;
 
 	// Set initial values of result
 	for (int col=0; col<ysize; col++) {
 		for (int row=0; row<xsize; row++) { 
-			*out++ = 0; 
+			//*out++ = 0;
+			*out++ = -1; 			
 		}
 	}
 
-	for (i = 1;  i < ysize - 1; i++) {
-		for (j = 1; j < xsize -1; j++) {
-			int offset = i*xsize + j;
+	int *imageWidth, *imageHeight, *image, *output, *threshold;
 
-			sum1 =  pic[xsize * (i - 1) + j + 1 ] - pic[xsize * (i - 1) + j - 1] +
-					2 * pic[xsize * (i) + j + 1 ] - 2 * pic[xsize * (i) + j - 1] +
-					pic[xsize * (i + 1) + j + 1 ] - pic[xsize * (i + 1) + j - 1];
+	cudaMalloc((void **)&imageWidth, sizeof(int));
+	cudaMalloc((void **)&imageHeight, sizeof(int));
+	cudaMalloc((void **)&image, numbytes);
+	cudaMalloc((void **)&output, numbytes);
+	cudaMalloc((void **)&threshold, sizeof(int));
 
-			sum2 = pic[xsize * (i - 1) + j - 1] + 2 * pic[xsize * (i - 1) + j] +
-				   pic[xsize * (i - 1) + j + 1] - pic[xsize * (i + 1) + j - 1] - 
-				   2 * pic[xsize * (i + 1) + j] - pic[xsize * (i + 1) + j + 1];
+	cudaMemcpy(imageWidth, &xsize, sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(imageHeight, &ysize, sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(image, pic, numbytes, cudaMemcpyHostToDevice);
+	cudaMemcpy(output, result, numbytes, cudaMemcpyHostToDevice);
+	cudaMemcpy(threshold, &thresh, sizeof(int), cudaMemcpyHostToDevice);
+	
+	sobel<<<1,1>>>(imageWidth, imageHeight, image, output, threshold);
 
-			magnitude =  sum1 * sum1 + sum2 * sum2;
+	cudaMemcpy(result, output, numbytes, cudaMemcpyDeviceToHost);
 
-			if (magnitude > thresh) {
-				result[offset] = 255;
-			}
-			else { 
-				result[offset] = 0;
-			}
-		}
-	}
-
+	cudaFree(imageWidth);
+	cudaFree(imageHeight);
+	cudaFree(image);
+	cudaFree(output);
+	cudaFree(threshold);
+		
 	write_ppm( "result.ppm", xsize, ysize, 255, result);
 	fprintf(stderr, "sobel done\n"); 
 }
