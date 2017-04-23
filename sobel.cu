@@ -99,11 +99,8 @@ unsigned int *read_ppm( char *filename, int * xsize, int * ysize, int *maxval ){
 
 	fclose(fp);
 
-
 	int pixels = (*xsize) * (*ysize);
 	for (int i=0; i<pixels; i++) pic[i] = (int) buf[3*i];  // red channel
-
-
 
 	return pic; // success
 }
@@ -112,10 +109,12 @@ void write_ppm( char *filename, int xsize, int ysize, int maxval, int *pic) {
 	FILE *fp;
 	//int x,y;
 
+	fprintf(stderr, "write_ppm( %s )\n", filename);	
+
 	fp = fopen(filename, "w");
 	if (!fp) 
 	{
-		fprintf(stderr, "FAILED TO OPEN FILE '%s' for writing\n");
+		fprintf(stderr, "FAILED TO OPEN FILE '%s' for writing\n", filename);
 		exit(-1); 
 	}
 
@@ -158,97 +157,87 @@ __global__ void sobel(int* imageWidth, int* imageHeight, int* image, int* output
 			}
 		}
 	}
-
-/*
-	for (i = 1;  i < ysize - 1; i++) {
-		for (j = 1; j < xsize -1; j++) {
-			int offset = i*xsize + j;
-
-			sum1 =  pic[xsize * (i - 1) + j + 1 ] - pic[xsize * (i - 1) + j - 1] +
-					2 * pic[xsize * (i) + j + 1 ] - 2 * pic[xsize * (i) + j - 1] +
-					pic[xsize * (i + 1) + j + 1 ] - pic[xsize * (i + 1) + j - 1];
-
-			sum2 = pic[xsize * (i - 1) + j - 1] + 2 * pic[xsize * (i - 1) + j] +
-				   pic[xsize * (i - 1) + j + 1] - pic[xsize * (i + 1) + j - 1] - 
-				   2 * pic[xsize * (i + 1) + j] - pic[xsize * (i + 1) + j + 1];
-
-			magnitude =  sum1 * sum1 + sum2 * sum2;
-
-			if (magnitude > thresh) {
-				result[offset] = 255;
-			}
-			else { 
-				result[offset] = 0;
-			}
-		}
-	}
-*/
 }
 
-int main( int argc, char **argv )
-{
+int main( int argc, char **argv ) {
 	int thresh = DEFAULT_THRESHOLD;
-	char *filename;
-	filename = strdup( DEFAULT_FILENAME);
+	int number_of_files = 20000;
+	cudaEvent_t start_event, stop_event;
+	float elapsed_time_gpu;
 
-	if (argc > 1) {
-		if (argc == 3)  { // filename AND threshold
-			filename = strdup( argv[1]);
-			thresh = atoi( argv[2] );
-		}
-		if (argc == 2) { // default file but specified threshhold
-			thresh = atoi( argv[1] );
-		}
-
-		fprintf(stderr, "file %s    threshold %d\n", filename, thresh); 
+	if(argc > 1) {
+		number_of_files = atoi(argv[1]);
 	}
 
-	int xsize, ysize, maxval;
-	unsigned int *pic = read_ppm( filename, &xsize, &ysize, &maxval ); 
+	cudaEventCreate(&start_event);
+	cudaEventCreate(&stop_event);
 
-	int numbytes =  xsize * ysize * 3 * sizeof( int );
-	int *result = (int *) malloc( numbytes );
+	cudaEventRecord(start_event, 0);  
+	for(int i = 1; i <= number_of_files; i++) {
+		char *in_filename = (char*)malloc(36 * sizeof(char));
+		char *out_filename = (char*)malloc(36 * sizeof(char));
 
-	if (!result) { 
-		fprintf(stderr, "sobel() unable to malloc %d bytes\n", numbytes);
-		exit(-1); // fail
-	}
+		sprintf(in_filename, "./sintel/sintel%03d.ppm", i);
+		sprintf(out_filename, "./sintel-sobel/sintel-sobel%03d.ppm", i);
 
-	int *out = result;
+		int xsize, ysize, maxval;
+		unsigned int *pic = read_ppm( in_filename, &xsize, &ysize, &maxval ); 
 
-	// Set initial values of result
-	for (int col=0; col<ysize; col++) {
-		for (int row=0; row<xsize; row++) { 
-			//*out++ = 0;
-			*out++ = -1; 			
+		int numbytes =  xsize * ysize * 3 * sizeof( int );
+		int *result = (int *) malloc( numbytes );
+
+		if (!result) { 
+			fprintf(stderr, "sobel() unable to malloc %d bytes\n", numbytes);
+			exit(-1); // fail
 		}
-	}
 
-	int *imageWidth, *imageHeight, *image, *output, *threshold;
+		int *out = result;
 
-	cudaMalloc((void **)&imageWidth, sizeof(int));
-	cudaMalloc((void **)&imageHeight, sizeof(int));
-	cudaMalloc((void **)&image, numbytes);
-	cudaMalloc((void **)&output, numbytes);
-	cudaMalloc((void **)&threshold, sizeof(int));
+		// Set initial values of result
+		for (int col=0; col<ysize; col++) {
+			for (int row=0; row<xsize; row++) { 
+				*out++ = -1; 			
+			}
+		}
 
-	cudaMemcpy(imageWidth, &xsize, sizeof(int), cudaMemcpyHostToDevice);
-	cudaMemcpy(imageHeight, &ysize, sizeof(int), cudaMemcpyHostToDevice);
-	cudaMemcpy(image, pic, numbytes, cudaMemcpyHostToDevice);
-	cudaMemcpy(output, result, numbytes, cudaMemcpyHostToDevice);
-	cudaMemcpy(threshold, &thresh, sizeof(int), cudaMemcpyHostToDevice);
-	
-	sobel<<<1,1>>>(imageWidth, imageHeight, image, output, threshold);
+		int *imageWidth, *imageHeight, *image, *output, *threshold;
 
-	cudaMemcpy(result, output, numbytes, cudaMemcpyDeviceToHost);
+		cudaMalloc((void **)&imageWidth, sizeof(int));
+		cudaMalloc((void **)&imageHeight, sizeof(int));
+		cudaMalloc((void **)&image, numbytes);
+		cudaMalloc((void **)&output, numbytes);
+		cudaMalloc((void **)&threshold, sizeof(int));
 
-	cudaFree(imageWidth);
-	cudaFree(imageHeight);
-	cudaFree(image);
-	cudaFree(output);
-	cudaFree(threshold);
+		cudaMemcpy(imageWidth, &xsize, sizeof(int), cudaMemcpyHostToDevice);
+		cudaMemcpy(imageHeight, &ysize, sizeof(int), cudaMemcpyHostToDevice);
+		cudaMemcpy(image, pic, numbytes, cudaMemcpyHostToDevice);
+		cudaMemcpy(output, result, numbytes, cudaMemcpyHostToDevice);
+		cudaMemcpy(threshold, &thresh, sizeof(int), cudaMemcpyHostToDevice);
 		
-	write_ppm( "result.ppm", xsize, ysize, 255, result);
+		sobel<<<1,1>>>(imageWidth, imageHeight, image, output, threshold);
+
+		cudaMemcpy(result, output, numbytes, cudaMemcpyDeviceToHost);
+
+		cudaFree(imageWidth);
+		cudaFree(imageHeight);
+		cudaFree(image);
+		cudaFree(output);
+		cudaFree(threshold);
+			
+		write_ppm( out_filename, xsize, ysize, 255, result);
+
+		free(pic);
+		free(result);
+		free(out_filename);
+		free(in_filename);
+	}
+	cudaEventRecord(stop_event, 0);
+
+	cudaEventSynchronize(stop_event);
+	cudaEventElapsedTime(&elapsed_time_gpu,start_event, stop_event);
+
+	printf("Parallel Time: %.2f msec\n", elapsed_time_gpu);
+
 	fprintf(stderr, "sobel done\n"); 
 }
 
